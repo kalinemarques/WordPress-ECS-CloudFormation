@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+#definição da vpc
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MinhaVPC 
+  #definição da subnetA
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.0.0/24"
+      AvailabilityZone: "us-east-1a"
+      Tags:
+        - Key: Name
+          Value: SubnetA 
+  #definição da subnetB
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "10.0.1.0/24"
+      AvailabilityZone: "us-east-1b"
+      Tags:
+        - Key: Name
+          Value: SubnetB
+
+Outputs:
+  VpcId:
+    Description: ID da VPC criada
+    Value: !Ref MyVPC
+  SubnetIds:
+    Description: IDs das subnets criadas
+    Value: !Join [",", [!Ref SubnetA, !Ref SubnetB]]
