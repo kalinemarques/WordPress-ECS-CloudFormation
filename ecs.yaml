@@ -1,5 +1,6 @@
-AWSTemplateFormatVersion: 2010-09-09
-#Definição dos parâmetros
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template para criar um ambiente WordPress com ECS, ALB, e EFS.
+
 Parameters:
   KeyName:
     Type: 'AWS::EC2::KeyPair::KeyName'
@@ -56,6 +57,8 @@ Parameters:
       - i2.4xlarge
       - i2.8xlarge
     ConstraintDescription: Please choose a valid instance type.
+
+# Associação de nomes de regiões da AWS a IDs de imagens de máquina:
 Mappings:
   AWSRegionToAMI:
     us-east-1:
@@ -76,12 +79,14 @@ Mappings:
       AMIID: ami-0b68661b29b9e058c
     ap-southeast-2:
       AMIID: ami-00e4b147599c13588
-#definição dosrecursos:
+
+# Definição dos recursos:
 Resources:
-#criação do cluster:
+  # Criação do cluster
   ECSCluster:
     Type: 'AWS::ECS::Cluster'
-#Grupos de segurança ecs:
+
+  # Grupos de segurança ECS:
   EcsSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
@@ -104,7 +109,140 @@ Resources:
       ToPort: 22
       CidrIp: 0.0.0.0/0
   
+  # Grupo de segurança para contêineres do WordPress no ECS:
+  WordPressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for WordPress ECS containers
+      VpcId: !Ref VPC
 
+  # Cluster do ECS para o WordPress:
+  WordPressCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  # Grupo de destino do ALB:
+  WordPressTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: WordPressTargetGroup
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: 80
+      HealthCheckPath: /index.html
+      Matcher:
+        HttpCode: 200
+
+  # Definição da tarefa do WordPress no ECS:
+  WordPressTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: WordPress
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt WordPressExecutionRole.Arn
+      RequiresCompatibilities:
+        - EC2
+      Cpu: '256'
+      Memory: '512'
+      ContainerDefinitions:
+        - Name: WordPressContainer
+          Image: wordpress:latest  # Substitua pela imagem do WordPress desejada
+          PortMappings:
+            - ContainerPort: 80
+
+  # Serviço do WordPress no ECS:
+  WordPressService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref WordPressCluster
+      LaunchType: EC2
+      DesiredCount: 2
+      TaskDefinition: !Ref WordPressTaskDefinition
+      LoadBalancers:
+        - ContainerName: WordPressContainer
+          ContainerPort: 80
+          TargetGroupArn: !Ref WordPressTargetGroup
+
+  # Template de lançamento EC2:
+  WordPressLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: WordPressLaunchTemplate
+      VersionDescription: Initial version
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        SecurityGroupIds:
+          - !GetAtt WordPressSecurityGroup.GroupId
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo "ECS_CLUSTER=${ClusterName}" >> /etc/ecs/ecs.config
+
+  # Sistema de arquivos EFS para o WordPress:
+  WordPressEFS:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      FileSystemTags:
+        - Key: Name
+          Value: WordPressEFS
+
+  # Pontos de montagem do EFS em sub-redes A e B:
+  WordPressEFSMountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref WordPressEFS
+      SubnetId: !Ref SubnetA
+      SecurityGroups:
+        - !GetAtt WordPressSecurityGroup.GroupId
+
+  WordPressEFSMountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref WordPressEFS
+      SubnetId: !Ref SubnetB
+      SecurityGroups:
+        - !GetAtt WordPressSecurityGroup.GroupId
+
+  # Função de execução do WordPress no ECS:
+  WordPressExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: WordPressExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # Balanceador de carga do ALB para o WordPress:
+  WordPressLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      AvailabilityZones:
+        - !GetAtt SubnetA.AvailabilityZone
+        - !GetAtt SubnetB.AvailabilityZone
+      SecurityGroups:
+        - !GetAtt WordPressSecurityGroup.GroupId
+      Listeners:
+        - LoadBalancerPort: '80'
+          InstancePort: '80'
+          Protocol: HTTP
+      Scheme: internet-facing
+
+# Saídas:
 Outputs:
-  ecscluster:
-    Value: !Ref ECSCluster
+  WordPressLoadBalancerDNSName:
+    Description: DNS Name do Balanceador de Carga do WordPress.
+    Value: !GetAtt WordPressLoadBalancer.DNSName
+
+  WordPressEFSId:
+    Description: ID do sistema de arquivos EFS do WordPress.
+    Value: !Ref WordPressEFS
